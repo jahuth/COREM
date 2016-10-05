@@ -1,3 +1,7 @@
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <stdio.h>
 #include "Retina.h"
 
 Retina::Retina(int x, int y, double temporal_step){
@@ -106,6 +110,10 @@ int Retina::getSizeY(){
 
 double Retina::getStep(){
     return step;
+}
+
+void Retina::setVerbosity(bool verbose_flag){
+    verbose = verbose_flag;
 }
 
 void Retina::setSimTotalRep(double r){
@@ -345,63 +353,80 @@ int Retina::getNumberModules(){
 bool Retina::setInputSeq(string s){
 
     bool valueToReturn = false;
-    const char * directory = s.c_str();
+    struct stat input_seq_path_stat;
+    
+    // Check if the specified input-sequence path is a directory or a movie file
+    if(stat(s.c_str(), &input_seq_path_stat) == 0){
+        if(S_ISDIR(input_seq_path_stat.st_mode)){ // The user has specified a directory as input sequence: load all the directory files
+            std::vector <std::string> result;
+            DIR* dp=opendir(s.c_str());
 
-    std::vector <std::string> result;
-    dirent* de;
-    DIR* dp=opendir (directory);
+            if (dp){
+                dirent* de;
+                do{ // For each directory entry:
+                    de = readdir(dp);
+                    if (de != NULL){ // We got a valid entry
+                        std::string curr_input_file_path(s + de->d_name); // Compose the entire current dir entry path
+                    
+                        if(stat(curr_input_file_path.c_str(), &input_seq_path_stat) == 0){ // Try to get information about the de->d_name
+                            if(!S_ISDIR(input_seq_path_stat.st_mode)){ // Directories (including . and ..) are not included in the input file sequence
+                                result.push_back( curr_input_file_path );
+                                valueToReturn = true; // At least one image was found, proceed
+                            }
+                        }else
+                            perror("Error accessing the specified input sequence directory: ");
+                    }
+                }while (de != NULL); // Continue while we get valid directory entries
+                closedir(dp);
+            }else{
+                cout << "Error reading retina script: Cannot open input sequence directory " << s << endl;
+            }
 
-    if (dp){
-        while (true)
-          {
-              de = readdir( dp );
-              if (de == NULL) break;
-              result.push_back( std::string( de->d_name ) );
-              std::sort( result.begin(), result.end() );
-          }
+            if (valueToReturn){
+                CImg <double> image(result[0].c_str());  // First file of the sequence. result[1] and result[0] are current and up direcgory
+                sizeX = image.height();
+                sizeY = image.width();
 
-        closedir( dp );
-        valueToReturn = true;
-    }else{
-        cout << "Errors found reading the retina script" << endl;
-    }
+                std::sort( result.begin(), result.end() );
 
-      if (valueToReturn){
+                numberImages = result.size();
+                inputSeq = new CImg<double>*[numberImages];
 
-          const char * ff = result[2].c_str();
-          const char* dir = directory;
-          char input_im_example[1000];
-          strcpy(input_im_example,dir);
-          strcat(input_im_example,ff);
+                for (int i=0;i<numberImages;i++){
+                    inputSeq[i]=new CImg <double>(sizeY,sizeX,1,3);
+                }
 
-          CImg <double> image(input_im_example);
-          sizeX = image.height();
-          sizeY = image.width();
+                for(int i=0;i<numberImages;i++){
+                    CImg <double> image(result[i].c_str());
+                    *(inputSeq[i])=image;
+                }
 
-          numberImages = result.size()-2;
-          inputSeq = new CImg<double>*[numberImages];
+                if(verbose) cout << numberImages << " images read from " << s << endl;
+                inputType = 0;
 
-          for (int i=0;i<numberImages;i++){
-                   inputSeq[i]=new CImg <double>(sizeY,sizeX,1,3);
-          }
+              }
+        } else { // The user has specified a file as input sequence: load all the movie files
+        
+            CImg <double> inp_movie(s.c_str()); // We assume that the specified file is a sequence of images
+            sizeX = inp_movie.height();
+            sizeY = inp_movie.width();
+            numberImages = inp_movie.depth();
 
-          for(int i=0;i<numberImages;i++){
-              const char * file = result[i+2].c_str();
-              const char* dir = directory;
-              char input_im[1000];
-              strcpy(input_im,dir);
-              strcat(input_im,file);
+            inputSeq = new CImg<double>*[numberImages];
 
-              CImg <double> image(input_im);
-              *(inputSeq[i])=image;
+            for (int i=0;i<numberImages;i++){
+                inputSeq[i]=new CImg <double>(sizeY,sizeX,1,3);
+            }
 
-          }
+            for(int i=0;i<numberImages;i++)
+                *(inputSeq[i])=inp_movie.get_slice(i);
 
-          if(verbose)cout << numberImages << " images read from "<< directory << endl;
-          inputType = 0;
-
-      }
-
+            if(verbose) cout << numberImages << " frames read from " << s << endl;
+            inputType = 0;
+            valueToReturn = true;
+        }
+    } else
+        perror("Error accessing the specified input sequence: ");
     return valueToReturn;
 }
 
